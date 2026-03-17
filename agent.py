@@ -41,10 +41,11 @@ import scipy.signal
 # --- AI ENGINES ---
 import openwakeword
 from openwakeword.model import Model
-import ollama 
+import ollama  # Still used for Moondream (vision model)
+import anthropic  # Claude API for text/conversation
 
 # --- WEB SEARCH (Using your working import) ---
-from ddgs import DDGS 
+from ddgs import DDGS
 
 # =========================================================================
 # 1. CONFIGURATION & CONSTANTS
@@ -60,22 +61,27 @@ WAKE_WORD_THRESHOLD = 0.5
 INPUT_DEVICE_NAME = None 
 
 DEFAULT_CONFIG = {
-    "text_model": "gemma3:1b",
+    "text_model": "claude-haiku-4-5-20251001",
     "vision_model": "moondream",
     "voice_model": "piper/en_GB-semaine-medium.onnx",
     "chat_memory": True,
     "camera_rotation": 0,
-    "system_prompt_extras": ""
+    "personality_file": "prompts/bmo_companion.txt",
+    "system_prompt_extras": "",
+    "max_tokens": 256
 }
 
-# LLM SETTINGS
+# OLLAMA SETTINGS (for Moondream vision model only)
 OLLAMA_OPTIONS = {
-    'keep_alive': '-1',     
+    'keep_alive': '-1',
     'num_thread': 4,
-    'temperature': 0.7,     
+    'temperature': 0.7,
     'top_k': 40,
     'top_p': 0.9
 }
+
+# CLAUDE CLIENT
+CLAUDE_CLIENT = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY env var
 
 def load_config():
     config = DEFAULT_CONFIG.copy()
@@ -90,7 +96,9 @@ def load_config():
 
 CURRENT_CONFIG = load_config()
 TEXT_MODEL = CURRENT_CONFIG["text_model"]
+SMART_MODEL = CURRENT_CONFIG.get("smart_model", TEXT_MODEL)
 VISION_MODEL = CURRENT_CONFIG["vision_model"]
+SMART_ROUTING = CURRENT_CONFIG.get("smart_routing", False)
 
 class BotStates:
     IDLE = "idle"             
@@ -101,33 +109,51 @@ class BotStates:
     CAPTURING = "capturing" 
     WARMUP = "warmup"       
 
-# --- SYSTEM PROMPT ---
-BASE_SYSTEM_PROMPT = """You are a helpful robot assistant running on a Raspberry Pi.
-Personality: Cute, helpful, robot.
-Style: Short sentences. Enthusiastic.
+# --- SYSTEM PROMPT (loaded from personality file) ---
+def load_personality():
+    personality_file = CURRENT_CONFIG.get("personality_file", "prompts/bmo_companion.txt")
+    if os.path.exists(personality_file):
+        with open(personality_file, "r") as f:
+            base_prompt = f.read().strip()
+        print(f"[INIT] Loaded personality from: {personality_file}", flush=True)
+    else:
+        base_prompt = "You are a helpful robot assistant. Keep responses short and friendly."
+        print(f"[INIT] Personality file not found: {personality_file}. Using default.", flush=True)
+    extras = CURRENT_CONFIG.get("system_prompt_extras", "")
+    if extras:
+        base_prompt += "\n\n" + extras
+    return base_prompt
 
-INSTRUCTIONS:
-- If the user asks for a physical action (time, search, photo), output JSON.
-- If the user just wants to chat, reply with NORMAL TEXT.
+SYSTEM_PROMPT = load_personality()
 
-### EXAMPLES ###
+# --- SMART MODEL ROUTING ---
+ROUTER_PROMPT = """Classify this user message as SIMPLE or COMPLEX. Reply with only one word.
 
-User: What time is it?
-You: {"action": "get_time", "value": "now"}
+SIMPLE = greetings, casual chat, jokes, simple questions, tool requests (time, photo, search), short factual answers, yes/no questions
+COMPLEX = explanations, analysis, advice, multi-step reasoning, creative writing, detailed questions, anything requiring deep thought
 
-User: Hello!
-You: Hi! I am ready to help!
+Message: "{message}"
 
-User: Search for news about robots.
-You: {"action": "search_web", "value": "robots news"}
+Classification:"""
 
-User: What do you see right now?
-You: {"action": "capture_image", "value": "environment"}
+def choose_model(user_text):
+    """Use Haiku to classify message complexity, then pick the right model."""
+    if not SMART_ROUTING or TEXT_MODEL == SMART_MODEL:
+        return TEXT_MODEL
 
-### END EXAMPLES ###
-"""
-
-SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + "\n\n" + CURRENT_CONFIG.get("system_prompt_extras", "")
+    try:
+        resp = CLAUDE_CLIENT.messages.create(
+            model=TEXT_MODEL,  # Haiku classifies (fast + cheap)
+            max_tokens=4,
+            messages=[{"role": "user", "content": ROUTER_PROMPT.format(message=user_text)}]
+        )
+        classification = resp.content[0].text.strip().upper()
+        chosen = SMART_MODEL if "COMPLEX" in classification else TEXT_MODEL
+        print(f"[ROUTER] '{user_text[:40]}...' → {classification} → {chosen}", flush=True)
+        return chosen
+    except Exception as e:
+        print(f"[ROUTER] Error: {e}. Defaulting to {TEXT_MODEL}", flush=True)
+        return TEXT_MODEL
 
 # Sound Directories
 greeting_sounds_dir = "sounds/greeting_sounds"
@@ -238,9 +264,10 @@ class BotGUI:
         self.tts_active.clear() 
         
         self.save_chat_history()
-        
+
+        # Unload Moondream from Ollama (Claude needs no cleanup)
         try:
-            ollama.generate(model=TEXT_MODEL, prompt="", keep_alive=0)
+            ollama.generate(model=VISION_MODEL, prompt="", keep_alive=0)
         except: pass
 
         self.master.quit()
@@ -482,12 +509,20 @@ class BotGUI:
 
     def warm_up_logic(self):
         self.set_state(BotStates.WARMUP, "Warming up brains...")
+        # Warm up Moondream (vision) via Ollama — Claude needs no warmup
         try:
-            ollama.generate(model=TEXT_MODEL, prompt="", keep_alive=-1)
+            ollama.generate(model=VISION_MODEL, prompt="", keep_alive=-1)
+            print(f"[INIT] Vision model ({VISION_MODEL}) loaded via Ollama.", flush=True)
         except Exception as e:
-            print(f"Failed to load {TEXT_MODEL}: {e}", flush=True)
+            print(f"[INIT] Vision model load skipped: {e}", flush=True)
+        # Verify Claude API key is set
+        try:
+            CLAUDE_CLIENT.models.list(limit=1)
+            print(f"[INIT] Claude API connected. Text model: {TEXT_MODEL}", flush=True)
+        except Exception as e:
+            print(f"[INIT] Claude API check: {e} (will try on first message)", flush=True)
         self.play_sound(self.get_random_sound(greeting_sounds_dir))
-        print("Models loaded.", flush=True)
+        print("Ready!", flush=True)
 
     def detect_wake_word_or_ptt(self):
         self.set_state(BotStates.IDLE, "Waiting...")
@@ -660,52 +695,81 @@ class BotGUI:
             self.set_state(BotStates.IDLE, "Memory Wiped")
             return
 
-        model_to_use = VISION_MODEL if img_path else TEXT_MODEL
         self.set_state(BotStates.THINKING, "Thinking...", cam_path=img_path)
-        
-        messages = []
+
+        # --- VISION PATH: Use Moondream via Ollama (local) ---
         if img_path:
             messages = [{"role": "user", "content": text, "images": [img_path]}]
-        else:
-            user_msg = {"role": "user", "content": text}
-            messages = self.permanent_memory + self.session_memory + [user_msg]
-        
+            self.thinking_sound_active.set()
+            threading.Thread(target=self._run_thinking_sound_loop, daemon=True).start()
+            try:
+                vision_resp = ollama.chat(model=VISION_MODEL, messages=messages, stream=False, options=OLLAMA_OPTIONS)
+                vision_description = vision_resp['message']['content']
+                self.thinking_sound_active.clear()
+                # Now ask Claude to respond in character using the vision description
+                followup = f"I just looked with my camera and here is what I see: {vision_description}\n\nThe user asked: {text}\n\nRespond in character based on what I see."
+                self.chat_and_respond(followup, img_path=None)
+                return
+            except Exception as e:
+                self.thinking_sound_active.clear()
+                print(f"Vision Error: {e}", flush=True)
+                self.set_state(BotStates.ERROR, "Camera brain freeze!")
+                return
+
+        # --- TEXT PATH: Use Claude API (cloud) ---
+        # Build messages for Claude (system prompt is separate, not in messages)
+        chat_messages = []
+        for msg in self.session_memory:
+            if msg["role"] in ("user", "assistant"):
+                chat_messages.append(msg)
+        chat_messages.append({"role": "user", "content": text})
+
+        # Pick model based on message complexity
+        selected_model = choose_model(text)
+
         self.thinking_sound_active.set()
         threading.Thread(target=self._run_thinking_sound_loop, daemon=True).start()
-        
+
         full_response_buffer = ""
-        sentence_buffer = "" 
-        
+        sentence_buffer = ""
+        max_tokens = CURRENT_CONFIG.get("max_tokens", 256)
+        # Give the smart model more room for longer answers
+        if selected_model == SMART_MODEL and selected_model != TEXT_MODEL:
+            max_tokens = max(max_tokens, 512)
+
         try:
-            stream = ollama.chat(model=model_to_use, messages=messages, stream=True, options=OLLAMA_OPTIONS)
-            
-            is_action_mode = False
-            
-            for chunk in stream:
-                if self.interrupted.is_set(): break 
-                content = chunk['message']['content']
-                full_response_buffer += content
-                
-                if '{"' in content or "action:" in content.lower():
-                    is_action_mode = True
+            with CLAUDE_CLIENT.messages.stream(
+                model=selected_model,
+                max_tokens=max_tokens,
+                system=SYSTEM_PROMPT,
+                messages=chat_messages
+            ) as stream:
+                is_action_mode = False
+
+                for content in stream.text_stream:
+                    if self.interrupted.is_set(): break
+                    full_response_buffer += content
+
+                    if '{"' in content or '"action"' in content:
+                        is_action_mode = True
+                        self.thinking_sound_active.clear()
+                        continue
+
+                    if is_action_mode: continue
+
                     self.thinking_sound_active.clear()
-                    continue 
+                    if self.current_state != BotStates.SPEAKING:
+                        self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
+                        self.append_to_text("BOT: ", newline=False)
 
-                if is_action_mode: continue
+                    self._stream_to_text(content)
 
-                self.thinking_sound_active.clear()
-                if self.current_state != BotStates.SPEAKING:
-                    self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
-                    self.append_to_text("BOT: ", newline=False)
-
-                self._stream_to_text(content)
-                
-                sentence_buffer += content
-                if any(punct in content for punct in ".!?\n"):
-                    clean_sentence = sentence_buffer.strip()
-                    if clean_sentence and re.search(r'[a-zA-Z0-9]', clean_sentence):
-                        with self.tts_queue_lock: self.tts_queue.append(clean_sentence)
-                    sentence_buffer = ""
+                    sentence_buffer += content
+                    if any(punct in content for punct in ".!?\n"):
+                        clean_sentence = sentence_buffer.strip()
+                        if clean_sentence and re.search(r'[a-zA-Z0-9]', clean_sentence):
+                            with self.tts_queue_lock: self.tts_queue.append(clean_sentence)
+                        sentence_buffer = ""
 
             if is_action_mode:
                 action_data = self.extract_json_from_text(full_response_buffer)
@@ -728,10 +792,10 @@ class BotGUI:
                         new_img_path = self.capture_image()
                         if new_img_path:
                             self.chat_and_respond(text, img_path=new_img_path)
-                            return 
+                            return
 
                     elif tool_result == "INVALID_ACTION":
-                        fallback_text = "I am not sure how to do that."
+                        fallback_text = "BMO is not sure how to do that!"
                         self.thinking_sound_active.clear()
                         self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
                         self.append_to_text("BOT: ", newline=False)
@@ -739,7 +803,7 @@ class BotGUI:
                         with self.tts_queue_lock: self.tts_queue.append(fallback_text)
 
                     elif tool_result == "SEARCH_EMPTY":
-                        fallback_text = "I searched, but I couldn't find any news about that."
+                        fallback_text = "BMO searched everywhere but could not find anything about that!"
                         self.thinking_sound_active.clear()
                         self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
                         self.append_to_text("BOT: ", newline=False)
@@ -747,7 +811,7 @@ class BotGUI:
                         with self.tts_queue_lock: self.tts_queue.append(fallback_text)
 
                     elif tool_result == "SEARCH_ERROR":
-                        fallback_text = "I cannot reach the internet right now."
+                        fallback_text = "Oh no! BMO cannot reach the internet right now."
                         self.thinking_sound_active.clear()
                         self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
                         self.append_to_text("BOT: ", newline=False)
@@ -755,28 +819,36 @@ class BotGUI:
                         with self.tts_queue_lock: self.tts_queue.append(fallback_text)
 
                     elif tool_result:
-                        summary_prompt = [
-                            {"role": "system", "content": "Summarize this result in one short sentence."},
-                            {"role": "user", "content": f"RESULT: {tool_result}\nUser Question: {text}"}
+                        # Ask Claude to summarize the tool result in BMO's voice
+                        summary_messages = [
+                            {"role": "user", "content": f"Here is a result BMO found:\n{tool_result}\n\nThe user asked: {text}\n\nSummarize this in one short sentence, in character as BMO."}
                         ]
-                        
+
                         self.set_state(BotStates.THINKING, "Reading...")
                         self.thinking_sound_active.set()
-                        
-                        final_resp = ollama.chat(model=model_to_use, messages=summary_prompt, stream=False, options=OLLAMA_OPTIONS)
-                        final_text = final_resp['message']['content']
-                        
+
+                        final_resp = CLAUDE_CLIENT.messages.create(
+                            model=TEXT_MODEL,
+                            max_tokens=max_tokens,
+                            system=SYSTEM_PROMPT,
+                            messages=summary_messages
+                        )
+                        final_text = final_resp.content[0].text
+
                         self.thinking_sound_active.clear()
                         self.set_state(BotStates.SPEAKING, "Speaking...", cam_path=img_path)
-                        
+
                         self.append_to_text("BOT: ", newline=False)
                         self.append_to_text(final_text, newline=True)
                         with self.tts_queue_lock: self.tts_queue.append(final_text)
                         self.session_memory.append({"role": "assistant", "content": final_text})
             else:
+                # Flush any remaining sentence buffer
+                if sentence_buffer.strip():
+                    with self.tts_queue_lock: self.tts_queue.append(sentence_buffer.strip())
                 self.append_to_text("")
-                self.session_memory.append({"role": "assistant", "content": full_response_buffer}) 
-            
+                self.session_memory.append({"role": "assistant", "content": full_response_buffer})
+
             self.wait_for_tts()
             self.set_state(BotStates.IDLE, "Ready")
                 
@@ -903,18 +975,23 @@ class BotGUI:
         except: pass
 
     def load_chat_history(self):
+        """Load conversation history. System prompt is NOT stored here — Claude takes it separately."""
         if os.path.exists(MEMORY_FILE):
             try:
-                with open(MEMORY_FILE, "r") as f: return json.load(f)
+                with open(MEMORY_FILE, "r") as f:
+                    history = json.load(f)
+                    # Filter out any legacy system messages (from Ollama format)
+                    return [m for m in history if m.get("role") != "system"]
             except: pass
-        return [{"role": "system", "content": SYSTEM_PROMPT}]
+        return []
 
     def save_chat_history(self):
-        full = self.permanent_memory + self.session_memory
-        conv = full[1:]
+        conv = self.permanent_memory + self.session_memory
+        # Only keep user/assistant messages, not system
+        conv = [m for m in conv if m.get("role") in ("user", "assistant")]
         if len(conv) > 10: conv = conv[-10:]
-        with open(MEMORY_FILE, "w") as f: 
-            json.dump([full[0]] + conv, f, indent=4)
+        with open(MEMORY_FILE, "w") as f:
+            json.dump(conv, f, indent=4)
 
 if __name__ == "__main__":
     print("--- SYSTEM STARTING ---", flush=True)

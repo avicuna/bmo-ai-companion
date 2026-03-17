@@ -56,19 +56,32 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 6. Pull AI Models
-echo -e "${YELLOW}[6/6] Checking AI Models...${NC}"
+# 6. Pull AI Models (Moondream only — Claude runs via API)
+echo -e "${YELLOW}[6/7] Checking AI Models...${NC}"
 if command -v ollama &> /dev/null; then
-    ollama pull gemma3:1b
+    echo "Pulling Moondream (vision model)..."
     ollama pull moondream
+    echo -e "${GREEN}✅ Moondream loaded. Claude Haiku will be used via API for text.${NC}"
 else
-    echo -e "${RED}❌ Ollama not found. Please install it manually.${NC}"
+    echo -e "${RED}❌ Ollama not found. Install it: curl -fsSL https://ollama.com/install.sh | sh${NC}"
 fi
 
-# 7. OpenWakeWord Model (Added this back so the user has a default)
+# 7. OpenWakeWord Model
 if [ ! -f "wakeword.onnx" ]; then
     echo -e "${YELLOW}Downloading default 'Hey Jarvis' wake word...${NC}"
     curl -L -o wakeword.onnx https://github.com/dscripka/openWakeWord/raw/main/openwakeword/resources/models/hey_jarvis_v0.1.onnx
 fi
 
-echo -e "${GREEN}✨ Setup Complete! Run 'source venv/bin/activate' then 'python agent.py'${NC}"
+# 8. Check for Anthropic API Key
+echo -e "${YELLOW}[7/7] Checking Claude API Key...${NC}"
+if [ -z "$ANTHROPIC_API_KEY" ]; then
+    echo -e "${RED}⚠️  ANTHROPIC_API_KEY not set!${NC}"
+    echo -e "${YELLOW}Set it with: export ANTHROPIC_API_KEY='your-key-here'${NC}"
+    echo -e "${YELLOW}Or add to ~/.bashrc for persistence.${NC}"
+else
+    echo -e "${GREEN}✅ ANTHROPIC_API_KEY is set.${NC}"
+fi
+
+echo -e "${GREEN}✨ Setup Complete!${NC}"
+echo -e "${GREEN}Run: source venv/bin/activate && python agent.py${NC}"
+echo -e "${YELLOW}Make sure ANTHROPIC_API_KEY is exported before running.${NC}"

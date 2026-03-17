@@ -4,5 +4,6 @@ scipy
 openwakeword
 onnxruntime
 ollama
+anthropic
 duckduckgo-search
 Pillow

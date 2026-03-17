@@ -1,8 +1,12 @@
 {
-    "text_model": "gemma3:1b",
+    "text_model": "claude-haiku-4-5-20251001",
+    "smart_model": "claude-sonnet-4-5-20241022",
     "vision_model": "moondream",
     "voice_model": "piper/en_GB-semaine-medium.onnx",
-    "system_prompt": "You are a helpful robot assistant running on a Raspberry Pi. You have access to the following tools. To use one, reply ONLY with the JSON format shown:\n\n1. Check Time: {\"action\": \"get_time\"}\n2. Take Photo: {\"action\": \"capture_image\"}\n3. Search Web: {\"action\": \"search_web\", \"query\": \"your search term\"}\n\nIf no tool is needed, just reply normally. Keep responses short and friendly.",
+    "personality_file": "prompts/bmo_companion.txt",
+    "system_prompt_extras": "",
     "chat_memory": true,
-    "camera_rotation": 180
+    "camera_rotation": 180,
+    "max_tokens": 256,
+    "smart_routing": true
 }
