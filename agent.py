@@ -46,6 +46,11 @@ import anthropic  # Claude API for text/conversation
 from elevenlabs.client import ElevenLabs  # BMO voice TTS
 from elevenlabs import play, stream as el_stream
 
+# --- BMO VOICE POST-PROCESSING ---
+import librosa
+import soundfile as sf
+from pedalboard import Pedalboard, HighpassFilter, LowpassFilter, Bitcrush, Reverb, Gain
+
 # --- WEB SEARCH (Using your working import) ---
 from ddgs import DDGS
 
@@ -100,6 +105,56 @@ if TTS_ENGINE == "elevenlabs":
     except Exception as e:
         print(f"[INIT] ElevenLabs failed: {e}. Falling back to Piper.", flush=True)
         TTS_ENGINE = "piper"
+
+# --- BMO VOICE POST-PROCESSING CHAIN ---
+# Makes any TTS voice sound like it's coming from a tiny game console
+BMO_VOICE_CHAIN = Pedalboard([
+    HighpassFilter(cutoff_frequency_hz=250),    # Cut muddy bass (small speaker sim)
+    LowpassFilter(cutoff_frequency_hz=7000),    # Roll off high end (toy speaker sim)
+    Bitcrush(bit_depth=12),                     # Subtle digital crunch
+    Reverb(room_size=0.05, wet_level=0.08),     # Tiny plastic box resonance
+    Gain(gain_db=2),                            # Compensate volume loss
+])
+
+BMO_PITCH_SHIFT = CURRENT_CONFIG.get("bmo_pitch_shift", 1.5)  # Semitones up
+BMO_LOFI_RATE = CURRENT_CONFIG.get("bmo_lofi_sample_rate", 11025)  # Downsample target
+BMO_POST_PROCESSING = CURRENT_CONFIG.get("bmo_post_processing", True)
+
+def apply_bmo_voice_effect(audio_array, sample_rate=22050):
+    """Apply the BMO game-console voice effect chain.
+
+    Takes raw TTS audio and makes it sound like BMO from the show:
+    1. Pitch shift up (childlike register)
+    2. Lo-fi downsample trick (device-like aliasing)
+    3. Pedalboard chain (small speaker + digital crunch + box reverb)
+    """
+    if not BMO_POST_PROCESSING:
+        return audio_array, sample_rate
+
+    y = audio_array.astype(np.float32)
+    # Normalize to [-1, 1] if needed
+    if np.max(np.abs(y)) > 1.0:
+        y = y / 32768.0
+
+    # Step 1: Pitch shift up (more childlike)
+    if BMO_PITCH_SHIFT != 0:
+        y = librosa.effects.pitch_shift(y, sr=sample_rate, n_steps=BMO_PITCH_SHIFT)
+
+    # Step 2: Lo-fi downsample trick (most impactful for "from a device" feel)
+    if BMO_LOFI_RATE > 0 and BMO_LOFI_RATE < sample_rate:
+        y = librosa.resample(y, orig_sr=sample_rate, target_sr=BMO_LOFI_RATE)
+        y = librosa.resample(y, orig_sr=BMO_LOFI_RATE, target_sr=sample_rate)
+
+    # Step 3: Pedalboard effects chain
+    y_2d = y.reshape(1, -1)  # Pedalboard expects (channels, samples)
+    y_processed = BMO_VOICE_CHAIN(y_2d, sample_rate).flatten()
+
+    # Convert back to int16
+    y_processed = np.clip(y_processed, -1.0, 1.0)
+    y_processed = (y_processed * 32767).astype(np.int16)
+
+    print(f"[BMO VOICE] Applied: pitch={BMO_PITCH_SHIFT}st, lofi={BMO_LOFI_RATE}Hz, chain=on", flush=True)
+    return y_processed, sample_rate
 
 def load_config():
     config = DEFAULT_CONFIG.copy()
@@ -926,16 +981,18 @@ class BotGUI:
             if not audio_data or self.interrupted.is_set():
                 return
 
-            # Play the audio via sounddevice
+            # Apply BMO voice post-processing (game console effect)
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            ELEVEN_RATE = 22050
+            audio_array, _ = apply_bmo_voice_effect(audio_array, ELEVEN_RATE)
 
+            # Prepare for playback
             try:
                 device_info = sd.query_devices(kind='output')
                 native_rate = int(device_info['default_samplerate'])
             except:
                 native_rate = 48000
 
-            ELEVEN_RATE = 22050
             use_native_rate = False
             try:
                 sd.check_output_settings(device=None, samplerate=ELEVEN_RATE)
@@ -967,7 +1024,7 @@ class BotGUI:
             self.current_volume = 0
 
     def speak_piper(self, text):
-        """Speak using local Piper TTS — fallback voice."""
+        """Speak using local Piper TTS — fallback voice, with BMO post-processing."""
         print(f"[PIPER SPEAKING] '{text}'", flush=True)
         voice_model = CURRENT_CONFIG.get("voice_model", "piper/en_GB-semaine-medium.onnx")
 
@@ -982,37 +1039,53 @@ class BotGUI:
             self.current_audio_process.stdin.write(text.encode() + b'\n')
             self.current_audio_process.stdin.close()
 
+            PIPER_RATE = 22050
+
+            # Collect all audio first (needed for post-processing)
+            raw_audio = b""
+            while True:
+                if self.interrupted.is_set(): break
+                data = self.current_audio_process.stdout.read(4096)
+                if not data: break
+                raw_audio += data
+
+            if not raw_audio or self.interrupted.is_set():
+                return
+
+            # Apply BMO voice post-processing
+            audio_array = np.frombuffer(raw_audio, dtype=np.int16)
+            audio_array, _ = apply_bmo_voice_effect(audio_array, PIPER_RATE)
+
+            # Prepare for playback
             try:
                 device_info = sd.query_devices(kind='output')
                 native_rate = int(device_info['default_samplerate'])
             except:
                 native_rate = 48000
 
-            PIPER_RATE = 22050
             use_native_rate = False
             try:
                 sd.check_output_settings(device=None, samplerate=PIPER_RATE)
             except:
                 use_native_rate = True
 
-            with sd.RawOutputStream(samplerate=native_rate if use_native_rate else PIPER_RATE,
-                                    channels=1, dtype='int16',
-                                    device=None, latency='low', blocksize=2048) as out_stream:
-                while True:
-                    if self.interrupted.is_set(): break
-                    data = self.current_audio_process.stdout.read(4096)
-                    if not data: break
+            if use_native_rate:
+                num_samples = int(len(audio_array) * (native_rate / PIPER_RATE))
+                audio_array = scipy.signal.resample(audio_array, num_samples).astype(np.int16)
+                playback_rate = native_rate
+            else:
+                playback_rate = PIPER_RATE
 
-                    audio_chunk = np.frombuffer(data, dtype=np.int16)
-                    if len(audio_chunk) > 0:
-                        self.current_volume = np.max(np.abs(audio_chunk))
-                        if use_native_rate:
-                            num_samples = int(len(audio_chunk) * (native_rate / PIPER_RATE))
-                            audio_chunk = scipy.signal.resample(audio_chunk, num_samples).astype(np.int16)
-                        out_stream.write(audio_chunk.tobytes())
-                    else:
-                        self.current_volume = 0
-                time.sleep(0.5)
+            # Play in chunks with interrupt support
+            chunk_size = 4096
+            with sd.RawOutputStream(samplerate=playback_rate, channels=1, dtype='int16',
+                                    device=None, latency='low', blocksize=2048) as out_stream:
+                for i in range(0, len(audio_array), chunk_size):
+                    if self.interrupted.is_set(): break
+                    chunk = audio_array[i:i + chunk_size]
+                    self.current_volume = np.max(np.abs(chunk)) if len(chunk) > 0 else 0
+                    out_stream.write(chunk.astype(np.int16).tobytes())
+                time.sleep(0.3)
 
         except Exception as e:
             print(f"[PIPER ERROR] {e}")

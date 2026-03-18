@@ -6,5 +6,8 @@ onnxruntime
 ollama
 anthropic
 elevenlabs
+pedalboard
+librosa
+soundfile
 duckduckgo-search
 Pillow

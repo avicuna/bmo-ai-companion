@@ -11,5 +11,8 @@
     "chat_memory": true,
     "camera_rotation": 180,
     "max_tokens": 256,
-    "smart_routing": true
+    "smart_routing": true,
+    "bmo_post_processing": true,
+    "bmo_pitch_shift": 1.5,
+    "bmo_lofi_sample_rate": 11025
 }
