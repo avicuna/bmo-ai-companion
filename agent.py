@@ -43,6 +43,8 @@ import openwakeword
 from openwakeword.model import Model
 import ollama  # Still used for Moondream (vision model)
 import anthropic  # Claude API for text/conversation
+from elevenlabs.client import ElevenLabs  # BMO voice TTS
+from elevenlabs import play, stream as el_stream
 
 # --- WEB SEARCH (Using your working import) ---
 from ddgs import DDGS
@@ -62,13 +64,18 @@ INPUT_DEVICE_NAME = None
 
 DEFAULT_CONFIG = {
     "text_model": "claude-haiku-4-5-20251001",
+    "smart_model": "claude-sonnet-4-5-20241022",
     "vision_model": "moondream",
     "voice_model": "piper/en_GB-semaine-medium.onnx",
+    "tts_engine": "elevenlabs",
+    "elevenlabs_voice_id": "",
+    "elevenlabs_model": "eleven_turbo_v2_5",
     "chat_memory": True,
     "camera_rotation": 0,
     "personality_file": "prompts/bmo_companion.txt",
     "system_prompt_extras": "",
-    "max_tokens": 256
+    "max_tokens": 256,
+    "smart_routing": True
 }
 
 # OLLAMA SETTINGS (for Moondream vision model only)
@@ -82,6 +89,17 @@ OLLAMA_OPTIONS = {
 
 # CLAUDE CLIENT
 CLAUDE_CLIENT = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY env var
+
+# ELEVENLABS CLIENT
+ELEVENLABS_CLIENT = None
+TTS_ENGINE = CURRENT_CONFIG.get("tts_engine", "piper")
+if TTS_ENGINE == "elevenlabs":
+    try:
+        ELEVENLABS_CLIENT = ElevenLabs()  # Uses ELEVEN_API_KEY env var
+        print(f"[INIT] ElevenLabs TTS enabled. Voice: {CURRENT_CONFIG.get('elevenlabs_voice_id', 'not set')}", flush=True)
+    except Exception as e:
+        print(f"[INIT] ElevenLabs failed: {e}. Falling back to Piper.", flush=True)
+        TTS_ENGINE = "piper"
 
 def load_config():
     config = DEFAULT_CONFIG.copy()
@@ -874,60 +892,132 @@ class BotGUI:
             else: time.sleep(0.05)
 
     def speak(self, text):
-        clean = re.sub(r"[^\w\s,.!?:-]", "", text)
+        clean = re.sub(r"[^\w\s,.!?:'()-]", "", text)
         if not clean.strip(): return
-        
-        print(f"[PIPER SPEAKING] '{clean}'", flush=True)
-        voice_model = CURRENT_CONFIG.get("voice_model", "piper/en_GB-semaine-medium.onnx")
-        
+
+        if TTS_ENGINE == "elevenlabs" and ELEVENLABS_CLIENT:
+            self.speak_elevenlabs(clean)
+        else:
+            self.speak_piper(clean)
+
+    def speak_elevenlabs(self, text):
+        """Speak using ElevenLabs API — BMO's cloned voice."""
+        voice_id = CURRENT_CONFIG.get("elevenlabs_voice_id", "")
+        if not voice_id:
+            print("[TTS] No ElevenLabs voice_id set! Falling back to Piper.", flush=True)
+            self.speak_piper(text)
+            return
+
+        print(f"[ELEVENLABS SPEAKING] '{text}'", flush=True)
         try:
-            self.current_audio_process = subprocess.Popen(
-                ["./piper/piper", "--model", voice_model, "--output-raw"], 
-                stdin=subprocess.PIPE, 
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL
+            audio_generator = ELEVENLABS_CLIENT.text_to_speech.convert(
+                text=text,
+                voice_id=voice_id,
+                model_id=CURRENT_CONFIG.get("elevenlabs_model", "eleven_turbo_v2_5"),
+                output_format="pcm_22050",
             )
-            
-            self.current_audio_process.stdin.write(clean.encode() + b'\n')
-            self.current_audio_process.stdin.close() 
+
+            # Collect audio chunks
+            audio_data = b""
+            for chunk in audio_generator:
+                if self.interrupted.is_set(): break
+                audio_data += chunk
+
+            if not audio_data or self.interrupted.is_set():
+                return
+
+            # Play the audio via sounddevice
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
 
             try:
                 device_info = sd.query_devices(kind='output')
                 native_rate = int(device_info['default_samplerate'])
             except:
-                native_rate = 48000 
+                native_rate = 48000
+
+            ELEVEN_RATE = 22050
+            use_native_rate = False
+            try:
+                sd.check_output_settings(device=None, samplerate=ELEVEN_RATE)
+            except:
+                use_native_rate = True
+
+            if use_native_rate:
+                num_samples = int(len(audio_array) * (native_rate / ELEVEN_RATE))
+                audio_array = scipy.signal.resample(audio_array, num_samples).astype(np.int16)
+                playback_rate = native_rate
+            else:
+                playback_rate = ELEVEN_RATE
+
+            # Play in chunks so we can check for interrupts
+            chunk_size = 4096
+            with sd.RawOutputStream(samplerate=playback_rate, channels=1, dtype='int16',
+                                    device=None, latency='low', blocksize=2048) as out_stream:
+                for i in range(0, len(audio_array), chunk_size):
+                    if self.interrupted.is_set(): break
+                    chunk = audio_array[i:i + chunk_size]
+                    self.current_volume = np.max(np.abs(chunk)) if len(chunk) > 0 else 0
+                    out_stream.write(chunk.astype(np.int16).tobytes())
+                time.sleep(0.3)
+
+        except Exception as e:
+            print(f"[ELEVENLABS ERROR] {e}. Falling back to Piper.", flush=True)
+            self.speak_piper(text)
+        finally:
+            self.current_volume = 0
+
+    def speak_piper(self, text):
+        """Speak using local Piper TTS — fallback voice."""
+        print(f"[PIPER SPEAKING] '{text}'", flush=True)
+        voice_model = CURRENT_CONFIG.get("voice_model", "piper/en_GB-semaine-medium.onnx")
+
+        try:
+            self.current_audio_process = subprocess.Popen(
+                ["./piper/piper", "--model", voice_model, "--output-raw"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+
+            self.current_audio_process.stdin.write(text.encode() + b'\n')
+            self.current_audio_process.stdin.close()
+
+            try:
+                device_info = sd.query_devices(kind='output')
+                native_rate = int(device_info['default_samplerate'])
+            except:
+                native_rate = 48000
 
             PIPER_RATE = 22050
             use_native_rate = False
-            
             try:
                 sd.check_output_settings(device=None, samplerate=PIPER_RATE)
             except:
                 use_native_rate = True
 
-            with sd.RawOutputStream(samplerate=native_rate if use_native_rate else PIPER_RATE, 
-                                    channels=1, dtype='int16', 
-                                    device=None, latency='low', blocksize=2048) as stream:
+            with sd.RawOutputStream(samplerate=native_rate if use_native_rate else PIPER_RATE,
+                                    channels=1, dtype='int16',
+                                    device=None, latency='low', blocksize=2048) as out_stream:
                 while True:
                     if self.interrupted.is_set(): break
                     data = self.current_audio_process.stdout.read(4096)
-                    if not data: break 
-                    
+                    if not data: break
+
                     audio_chunk = np.frombuffer(data, dtype=np.int16)
                     if len(audio_chunk) > 0:
                         self.current_volume = np.max(np.abs(audio_chunk))
                         if use_native_rate:
                             num_samples = int(len(audio_chunk) * (native_rate / PIPER_RATE))
                             audio_chunk = scipy.signal.resample(audio_chunk, num_samples).astype(np.int16)
-                        stream.write(audio_chunk.tobytes())
+                        out_stream.write(audio_chunk.tobytes())
                     else:
                         self.current_volume = 0
-                time.sleep(0.5) 
-                    
+                time.sleep(0.5)
+
         except Exception as e:
-            print(f"Audio Error: {e}")
+            print(f"[PIPER ERROR] {e}")
         finally:
-            self.current_volume = 0 
+            self.current_volume = 0
             if self.current_audio_process:
                 if self.current_audio_process.stdout: self.current_audio_process.stdout.close()
                 if self.current_audio_process.poll() is None: self.current_audio_process.terminate()

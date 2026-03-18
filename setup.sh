@@ -82,6 +82,18 @@ else
     echo -e "${GREEN}✅ ANTHROPIC_API_KEY is set.${NC}"
 fi
 
+# 9. Check for ElevenLabs API Key
+echo -e "${YELLOW}[8/8] Checking ElevenLabs API Key...${NC}"
+if [ -z "$ELEVEN_API_KEY" ]; then
+    echo -e "${RED}⚠️  ELEVEN_API_KEY not set!${NC}"
+    echo -e "${YELLOW}Set it with: export ELEVEN_API_KEY='your-key-here'${NC}"
+    echo -e "${YELLOW}BMO will use Piper TTS (generic voice) as fallback.${NC}"
+else
+    echo -e "${GREEN}✅ ELEVEN_API_KEY is set.${NC}"
+fi
+
 echo -e "${GREEN}✨ Setup Complete!${NC}"
 echo -e "${GREEN}Run: source venv/bin/activate && python agent.py${NC}"
-echo -e "${YELLOW}Make sure ANTHROPIC_API_KEY is exported before running.${NC}"
+echo -e "${YELLOW}Make sure these env vars are exported before running:${NC}"
+echo -e "${YELLOW}  ANTHROPIC_API_KEY (required)${NC}"
+echo -e "${YELLOW}  ELEVEN_API_KEY (for BMO voice, optional)${NC}"
