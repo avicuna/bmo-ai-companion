@@ -66,8 +66,12 @@ def load_personality():
 
 SYSTEM_PROMPT = load_personality()
 
-# Claude client
-CLIENT = anthropic.Anthropic()
+# Claude client — checks PERSONAL_ANTHROPIC_API_KEY first, falls back to ANTHROPIC_API_KEY
+API_KEY = os.environ.get("PERSONAL_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+if not API_KEY:
+    print("[ERROR] No API key found! Set PERSONAL_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY")
+    exit(1)
+CLIENT = anthropic.Anthropic(api_key=API_KEY)
 TEXT_MODEL = CONFIG["text_model"]
 SMART_MODEL = CONFIG.get("smart_model", TEXT_MODEL)
 SMART_ROUTING = CONFIG.get("smart_routing", False)

@@ -93,7 +93,9 @@ OLLAMA_OPTIONS = {
 }
 
 # CLAUDE CLIENT
-CLAUDE_CLIENT = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY env var
+# Checks PERSONAL_ANTHROPIC_API_KEY first, falls back to ANTHROPIC_API_KEY
+_API_KEY = os.environ.get("PERSONAL_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+CLAUDE_CLIENT = anthropic.Anthropic(api_key=_API_KEY)
 
 # ELEVENLABS CLIENT
 ELEVENLABS_CLIENT = None
