@@ -254,32 +254,36 @@ class VirtualBMO:
         self.append_chat("Hi hi hi! BMO is here! What should we do today?", "bmo")
 
     def detect_mood(self, user_text, bmo_reply):
-        """Detect the emotional mood from conversation to pick a face expression.
-        Uses match counting — the mood with the most keyword hits wins."""
-        text = (user_text + " " + bmo_reply).lower()
+        """Detect the emotional mood from the current exchange only.
+        User's words are weighted 3x more than BMO's reply to avoid
+        BMO's enthusiastic language triggering moods every time."""
+        user = user_text.lower()
+        reply = bmo_reply.lower()
 
         moods = {
             "sleeping": ["goodnight", "sleep", "tired", "bedtime", "nap", "rest", "zzz", "night night"],
-            "sad":      ["sad", "cry", "crying", "hurt", "bad day", "upset", "lonely", "depressed", "n-o-o-o", "sorry for"],
-            "love":     ["love", "heart", "beautiful", "i-o-o-o", "hug", "care about", "best friend", "adore", "cherish", "forever"],
-            "surprised": ["wow", "oh my gosh", "really?", "no way", "what?!", "whoa", "incredible", "cannot believe"],
+            "sad":      ["sad", "cry", "crying", "hurt", "bad day", "upset", "lonely", "depressed", "n-o-o-o"],
+            "love":     ["love you", "i love", "best friend", "beautiful", "adore", "cherish", "hug me"],
+            "surprised": ["wow", "oh my gosh", "no way", "what?!", "whoa", "incredible", "cannot believe"],
             "winking":  ["wink", "secret", "just kidding", "sneaky", "mischief", "between us"],
-            "happy":    ["yay", "excited", "awesome", "amazing", "bmo chop", "hooray", "wooo", "play", "game", "fun", "hehe", "wonderful"],
+            "happy":    ["yay", "excited", "awesome", "amazing", "bmo chop", "hooray", "wooo", "play a game", "fun", "wonderful"],
         }
 
-        # Count matches per mood
         scores = {}
         for mood, words in moods.items():
-            scores[mood] = sum(1 for w in words if w in text)
+            # User intent counts 3x more than BMO's reply
+            user_hits = sum(3 for w in words if w in user)
+            reply_hits = sum(1 for w in words if w in reply)
+            scores[mood] = user_hits + reply_hits
 
-        # Also boost happy for lots of exclamation marks
-        scores["happy"] = scores.get("happy", 0) + max(0, bmo_reply.count("!") - 2)
+        # Exclamation-heavy replies default to happy (but only mildly)
+        scores["happy"] = scores.get("happy", 0) + max(0, bmo_reply.count("!") - 4)
 
-        # Pick the mood with the highest score
         best_mood = max(scores, key=scores.get)
         best_score = scores[best_mood]
 
-        if best_score > 0:
+        # Need a minimum score to trigger — otherwise stay neutral
+        if best_score >= 3:
             print(f"[MOOD] {best_mood} (score: {best_score})")
             return best_mood
 
