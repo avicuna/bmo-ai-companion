@@ -69,7 +69,7 @@ INPUT_DEVICE_NAME = None
 
 DEFAULT_CONFIG = {
     "text_model": "claude-haiku-4-5-20251001",
-    "smart_model": "claude-sonnet-4-5-20241022",
+    "smart_model": "claude-sonnet-4-6",
     "vision_model": "moondream",
     "voice_model": "piper/en_GB-semaine-medium.onnx",
     "tts_engine": "elevenlabs",

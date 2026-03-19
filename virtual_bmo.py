@@ -30,7 +30,7 @@ WINDOW_HEIGHT = 600  # Extra height for chat panel below face
 
 DEFAULT_CONFIG = {
     "text_model": "claude-haiku-4-5-20251001",
-    "smart_model": "claude-sonnet-4-5-20241022",
+    "smart_model": "claude-sonnet-4-6",
     "personality_file": "prompts/bmo_companion.txt",
     "system_prompt_extras": "",
     "max_tokens": 256,
