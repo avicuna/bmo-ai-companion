@@ -124,6 +124,10 @@ class VirtualBMO:
         self.frame_index = 0
         self.session_memory = []
         self.is_processing = False
+        self.idle_blink_timer = 0
+        self.idle_next_blink = random.uniform(3.0, 6.0)  # seconds until next blink
+        self.idle_blinking = False
+        self.idle_blink_frame = 0
 
         # Load face animations
         self.load_animations()
@@ -210,29 +214,59 @@ class VirtualBMO:
 
     def update_animation(self):
         frames = self.animations.get(self.current_state, self.animations.get("idle", []))
-        if frames:
-            if self.current_state == "speaking":
-                self.frame_index = random.randint(0, len(frames) - 1)
-            else:
-                self.frame_index = (self.frame_index + 1) % len(frames)
-            self.face_label.config(image=frames[self.frame_index])
+        if not frames:
+            self.master.after(200, self.update_animation)
+            return
 
-        speeds = {
-            "idle": 200,       # Gentle blink cycle
-            "listening": 150,  # Attentive pulse
-            "thinking": 180,   # Eyes shifting
-            "speaking": 60,    # Fast mouth movement
-            "error": 250,      # Alternating distress
-            "capturing": 300,  # REC blink
-            "warmup": 200,     # Boot sequence
-            "happy": 150,      # Excited bounce
-            "sad": 350,        # Slow sad
-            "love": 200,       # Heart pulse
-            "surprised": 180,  # Quick shock
-            "sleeping": 500,   # Slow breathing
-            "winking": 200,    # Playful wink
-        }
-        speed = speeds.get(self.current_state, 200)
+        if self.current_state == "idle":
+            # Natural blink: stay on frame 0 (eyes open), randomly trigger blink
+            speed = 100  # Check frequently for smooth timing
+            self.idle_blink_timer += speed / 1000.0
+
+            if self.idle_blinking:
+                # Currently in a blink sequence: frames 4(half) → 5(closed) → 6(half) → back to 0
+                blink_frames = [4, 5, 6]  # half-close, closed, half-open
+                if self.idle_blink_frame < len(blink_frames):
+                    idx = min(blink_frames[self.idle_blink_frame], len(frames) - 1)
+                    self.face_label.config(image=frames[idx])
+                    self.idle_blink_frame += 1
+                else:
+                    # Blink done — back to eyes open
+                    self.idle_blinking = False
+                    self.idle_blink_frame = 0
+                    self.idle_blink_timer = 0
+                    # Next blink in 3-7 seconds (natural human range)
+                    self.idle_next_blink = random.uniform(3.0, 7.0)
+                    # Small chance of a quick double-blink
+                    if random.random() < 0.15:
+                        self.idle_next_blink = random.uniform(0.3, 0.6)
+                    # Occasionally show happy eyes instead of returning to default
+                    if random.random() < 0.1 and len(frames) > 9:
+                        self.face_label.config(image=frames[9])  # happy eyes frame
+                    else:
+                        self.face_label.config(image=frames[0])
+            else:
+                # Waiting for next blink — show eyes open (frame 0)
+                if self.idle_blink_timer >= self.idle_next_blink:
+                    self.idle_blinking = True
+                    self.idle_blink_frame = 0
+                else:
+                    self.face_label.config(image=frames[0])
+
+        elif self.current_state == "speaking":
+            self.frame_index = random.randint(0, len(frames) - 1)
+            self.face_label.config(image=frames[self.frame_index])
+            speed = 60
+        else:
+            self.frame_index = (self.frame_index + 1) % len(frames)
+            self.face_label.config(image=frames[self.frame_index])
+            speed = {
+                "listening": 150, "thinking": 180, "error": 250,
+                "capturing": 300, "warmup": 200, "happy": 150,
+                "sad": 350, "love": 200, "surprised": 180,
+                "sleeping": 500, "winking": 200,
+            }.get(self.current_state, 200)
+
         self.master.after(speed, self.update_animation)
 
     def set_state(self, state, status_msg=""):
