@@ -254,38 +254,23 @@ class VirtualBMO:
         self.append_chat("Hi hi hi! BMO is here! What should we do today?", "bmo")
 
     def detect_mood(self, user_text, bmo_reply):
-        """Detect the emotional mood from the current exchange only.
-        User's words are weighted 3x more than BMO's reply to avoid
-        BMO's enthusiastic language triggering moods every time."""
-        user = user_text.lower()
-        reply = bmo_reply.lower()
+        """Detect mood from USER'S message only.
+        BMO's reply is ignored — it's always enthusiastic which pollutes scoring."""
+        text = user_text.lower()
 
         moods = {
-            "sleeping": ["goodnight", "sleep", "tired", "bedtime", "nap", "rest", "zzz", "night night"],
-            "sad":      ["sad", "cry", "crying", "hurt", "bad day", "upset", "lonely", "depressed", "n-o-o-o"],
-            "love":     ["love you", "i love", "best friend", "beautiful", "adore", "cherish", "hug me"],
-            "surprised": ["wow", "oh my gosh", "no way", "what?!", "whoa", "incredible", "cannot believe"],
-            "winking":  ["wink", "secret", "just kidding", "sneaky", "mischief", "between us"],
-            "happy":    ["yay", "excited", "awesome", "amazing", "bmo chop", "hooray", "wooo", "play a game", "fun", "wonderful"],
+            "sleeping": ["goodnight", "sleep", "tired", "bedtime", "nap", "time for bed", "night night"],
+            "sad":      ["sad", "cry", "crying", "hurt", "bad day", "upset", "lonely", "depressed", "feeling down", "miss my"],
+            "love":     ["love you", "i love", "best friend", "you're beautiful", "adore", "cherish", "hug me", "my heart", "you mean"],
+            "surprised": ["wow", "oh my gosh", "no way", "what?!", "whoa", "incredible", "guess what", "you won't believe"],
+            "winking":  ["wink", "secret", "just kidding", "sneaky", "mischief", "between us", "don't tell"],
+            "happy":    ["yay", "excited", "awesome", "amazing", "bmo chop", "hooray", "let's play", "so fun", "wonderful", "celebrate"],
         }
 
-        scores = {}
         for mood, words in moods.items():
-            # User intent counts 3x more than BMO's reply
-            user_hits = sum(3 for w in words if w in user)
-            reply_hits = sum(1 for w in words if w in reply)
-            scores[mood] = user_hits + reply_hits
-
-        # Exclamation-heavy replies default to happy (but only mildly)
-        scores["happy"] = scores.get("happy", 0) + max(0, bmo_reply.count("!") - 4)
-
-        best_mood = max(scores, key=scores.get)
-        best_score = scores[best_mood]
-
-        # Need a minimum score to trigger — otherwise stay neutral
-        if best_score >= 3:
-            print(f"[MOOD] {best_mood} (score: {best_score})")
-            return best_mood
+            if any(w in text for w in words):
+                print(f"[MOOD] {mood} (matched in user text)")
+                return mood
 
         return "idle"
 
