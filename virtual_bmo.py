@@ -107,7 +107,10 @@ class VirtualBMO:
     FACE_WIDTH = 800
     FACE_HEIGHT = 480
 
-    STATES = ["idle", "listening", "thinking", "speaking", "error", "capturing", "warmup"]
+    STATES = [
+        "idle", "listening", "thinking", "speaking", "error", "capturing", "warmup",
+        "happy", "sad", "love", "surprised", "sleeping", "winking"
+    ]
 
     def __init__(self, master):
         self.master = master
@@ -214,7 +217,22 @@ class VirtualBMO:
                 self.frame_index = (self.frame_index + 1) % len(frames)
             self.face_label.config(image=frames[self.frame_index])
 
-        speed = 80 if self.current_state == "speaking" else 500
+        speeds = {
+            "idle": 200,       # Gentle blink cycle
+            "listening": 150,  # Attentive pulse
+            "thinking": 180,   # Eyes shifting
+            "speaking": 60,    # Fast mouth movement
+            "error": 250,      # Alternating distress
+            "capturing": 300,  # REC blink
+            "warmup": 200,     # Boot sequence
+            "happy": 150,      # Excited bounce
+            "sad": 350,        # Slow sad
+            "love": 200,       # Heart pulse
+            "surprised": 180,  # Quick shock
+            "sleeping": 500,   # Slow breathing
+            "winking": 200,    # Playful wink
+        }
+        speed = speeds.get(self.current_state, 200)
         self.master.after(speed, self.update_animation)
 
     def set_state(self, state, status_msg=""):
@@ -234,6 +252,38 @@ class VirtualBMO:
         self.set_state("idle", "BMO is ready! Type something!")
         self.append_chat("* BMO boots up *", "system")
         self.append_chat("Hi hi hi! BMO is here! What should we do today?", "bmo")
+
+    def detect_mood(self, user_text, bmo_reply):
+        """Detect the emotional mood from the conversation to pick a face expression."""
+        text = (user_text + " " + bmo_reply).lower()
+
+        # Check for strong emotional signals
+        sad_words = ["sad", "cry", "miss", "sorry", "hurt", "bad day", "upset", "lonely", "depressed", "n-o-o-o"]
+        love_words = ["love", "heart", "friend", "beautiful", "i-o-o-o", "hug", "care about", "best friend", "miss you"]
+        happy_words = ["yay", "excited", "awesome", "amazing", "bmo chop", "hehe", "hooray", "wooo", "play", "game", "fun"]
+        surprised_words = ["wow", "oh my", "really?", "no way", "what?!", "whoa", "oh!", "ohhh", "incredible"]
+        sleep_words = ["goodnight", "sleep", "tired", "bedtime", "nap", "rest", "zzz"]
+        wink_words = ["wink", "hehe", "secret", "just kidding", "trick", "sneaky", "mischief"]
+
+        # Priority order (most specific first)
+        if any(w in text for w in sleep_words):
+            return "sleeping"
+        if any(w in text for w in sad_words):
+            return "sad"
+        if any(w in text for w in love_words):
+            return "love"
+        if any(w in text for w in surprised_words):
+            return "surprised"
+        if any(w in text for w in wink_words):
+            return "winking"
+        if any(w in text for w in happy_words):
+            return "happy"
+
+        # Exclamation marks = excited
+        if bmo_reply.count("!") >= 3:
+            return "happy"
+
+        return "idle"
 
     def on_send(self, event=None):
         text = self.input_var.get().strip()
@@ -309,6 +359,12 @@ class VirtualBMO:
 
             # Brief speaking animation
             time.sleep(max(1.0, len(reply) * 0.02))
+
+            # Show mood-based expression before returning to idle
+            mood = self.detect_mood(text, reply)
+            if mood != "idle":
+                self.set_state(mood, f"BMO is feeling {mood}!")
+                time.sleep(1.5)
 
             self.set_state("idle", "BMO is ready!")
 
