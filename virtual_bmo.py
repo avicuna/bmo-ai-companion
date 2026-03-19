@@ -254,34 +254,34 @@ class VirtualBMO:
         self.append_chat("Hi hi hi! BMO is here! What should we do today?", "bmo")
 
     def detect_mood(self, user_text, bmo_reply):
-        """Detect the emotional mood from the conversation to pick a face expression."""
+        """Detect the emotional mood from conversation to pick a face expression.
+        Uses match counting — the mood with the most keyword hits wins."""
         text = (user_text + " " + bmo_reply).lower()
 
-        # Check for strong emotional signals
-        sad_words = ["sad", "cry", "miss", "sorry", "hurt", "bad day", "upset", "lonely", "depressed", "n-o-o-o"]
-        love_words = ["love", "heart", "friend", "beautiful", "i-o-o-o", "hug", "care about", "best friend", "miss you"]
-        happy_words = ["yay", "excited", "awesome", "amazing", "bmo chop", "hehe", "hooray", "wooo", "play", "game", "fun"]
-        surprised_words = ["wow", "oh my", "really?", "no way", "what?!", "whoa", "oh!", "ohhh", "incredible"]
-        sleep_words = ["goodnight", "sleep", "tired", "bedtime", "nap", "rest", "zzz"]
-        wink_words = ["wink", "hehe", "secret", "just kidding", "trick", "sneaky", "mischief"]
+        moods = {
+            "sleeping": ["goodnight", "sleep", "tired", "bedtime", "nap", "rest", "zzz", "night night"],
+            "sad":      ["sad", "cry", "crying", "hurt", "bad day", "upset", "lonely", "depressed", "n-o-o-o", "sorry for"],
+            "love":     ["love", "heart", "beautiful", "i-o-o-o", "hug", "care about", "best friend", "adore", "cherish", "forever"],
+            "surprised": ["wow", "oh my gosh", "really?", "no way", "what?!", "whoa", "incredible", "cannot believe"],
+            "winking":  ["wink", "secret", "just kidding", "sneaky", "mischief", "between us"],
+            "happy":    ["yay", "excited", "awesome", "amazing", "bmo chop", "hooray", "wooo", "play", "game", "fun", "hehe", "wonderful"],
+        }
 
-        # Priority order (most specific first)
-        if any(w in text for w in sleep_words):
-            return "sleeping"
-        if any(w in text for w in sad_words):
-            return "sad"
-        if any(w in text for w in love_words):
-            return "love"
-        if any(w in text for w in surprised_words):
-            return "surprised"
-        if any(w in text for w in wink_words):
-            return "winking"
-        if any(w in text for w in happy_words):
-            return "happy"
+        # Count matches per mood
+        scores = {}
+        for mood, words in moods.items():
+            scores[mood] = sum(1 for w in words if w in text)
 
-        # Exclamation marks = excited
-        if bmo_reply.count("!") >= 3:
-            return "happy"
+        # Also boost happy for lots of exclamation marks
+        scores["happy"] = scores.get("happy", 0) + max(0, bmo_reply.count("!") - 2)
+
+        # Pick the mood with the highest score
+        best_mood = max(scores, key=scores.get)
+        best_score = scores[best_mood]
+
+        if best_score > 0:
+            print(f"[MOOD] {best_mood} (score: {best_score})")
+            return best_mood
 
         return "idle"
 
@@ -349,22 +349,23 @@ class VirtualBMO:
                 except:
                     pass
 
-            # Speaking state
-            self.set_state("speaking", "BMO is talking!")
+            # Detect mood FIRST so we can show it during the response
+            mood = self.detect_mood(text, reply)
+
+            # Show mood expression while displaying the response
+            if mood != "idle":
+                self.set_state(mood, f"BMO is {mood}!")
+            else:
+                self.set_state("speaking", "BMO is talking!")
+
             self.append_chat(f"BMO [{model_label}]: {reply}", "bmo")
 
             # Store in memory
             self.session_memory.append({"role": "user", "content": text})
             self.session_memory.append({"role": "assistant", "content": reply})
 
-            # Brief speaking animation
-            time.sleep(max(1.0, len(reply) * 0.02))
-
-            # Show mood-based expression before returning to idle
-            mood = self.detect_mood(text, reply)
-            if mood != "idle":
-                self.set_state(mood, f"BMO is feeling {mood}!")
-                time.sleep(1.5)
+            # Hold the expression briefly so user can see it
+            time.sleep(2.0)
 
             self.set_state("idle", "BMO is ready!")
 
