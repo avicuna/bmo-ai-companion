@@ -253,26 +253,23 @@ class VirtualBMO:
         self.append_chat("* BMO boots up *", "system")
         self.append_chat("Hi hi hi! BMO is here! What should we do today?", "bmo")
 
-    def detect_mood(self, user_text, bmo_reply):
-        """Detect mood from USER'S message only.
-        BMO's reply is ignored — it's always enthusiastic which pollutes scoring."""
-        text = user_text.lower()
-
-        moods = {
-            "sleeping": ["goodnight", "sleep", "tired", "bedtime", "nap", "time for bed", "night night"],
-            "sad":      ["sad", "cry", "crying", "hurt", "bad day", "upset", "lonely", "depressed", "feeling down", "miss my"],
-            "love":     ["love you", "i love", "best friend", "you're beautiful", "adore", "cherish", "hug me", "my heart", "you mean"],
-            "surprised": ["wow", "oh my gosh", "no way", "what?!", "whoa", "incredible", "guess what", "you won't believe"],
-            "winking":  ["wink", "secret", "just kidding", "sneaky", "mischief", "between us", "don't tell"],
-            "happy":    ["yay", "excited", "awesome", "amazing", "bmo chop", "hooray", "let's play", "so fun", "wonderful", "celebrate"],
-        }
-
-        for mood, words in moods.items():
-            if any(w in text for w in words):
-                print(f"[MOOD] {mood} (matched in user text)")
-                return mood
-
-        return "idle"
+    def parse_mood_tag(self, reply):
+        """Extract [mood:STATE] tag from Claude's response.
+        Returns (clean_reply, mood_state)."""
+        import re
+        match = re.search(r'\[mood:(\w+)\]\s*$', reply.strip())
+        if match:
+            mood = match.group(1)
+            # Remove the tag from the displayed text
+            clean = re.sub(r'\n?\[mood:\w+\]\s*$', '', reply.strip())
+            valid_moods = {"idle", "happy", "sad", "love", "surprised", "sleeping", "winking"}
+            if mood in valid_moods:
+                print(f"[MOOD] {mood} (from Claude)")
+                return clean.strip(), mood
+            else:
+                print(f"[MOOD] unknown '{mood}', defaulting to idle")
+                return clean.strip(), "idle"
+        return reply.strip(), "idle"
 
     def on_send(self, event=None):
         text = self.input_var.get().strip()
@@ -318,7 +315,10 @@ class VirtualBMO:
                 messages=chat_messages
             )
 
-            reply = response.content[0].text
+            raw_reply = response.content[0].text
+
+            # Parse mood tag from Claude's response
+            reply, mood = self.parse_mood_tag(raw_reply)
 
             # Check for tool actions
             action_match = re.search(r'\{.*"action".*\}', reply, re.DOTALL)
@@ -330,16 +330,16 @@ class VirtualBMO:
                         import datetime
                         now = datetime.datetime.now().strftime("%I:%M %p")
                         reply = f"It is {now}! That is a very good time!"
+                        mood = "happy"
                     elif action == "capture_image":
                         reply = "BMO would take a photo now! But BMO has no camera in virtual mode. BMO chop!"
+                        mood = "winking"
                     elif action == "search_web":
                         query = action_data.get("value", action_data.get("query", ""))
                         reply = f"BMO would search for \"{query}\" now! But BMO is in virtual mode. Try asking BMO directly!"
+                        mood = "idle"
                 except:
                     pass
-
-            # Detect mood FIRST so we can show it during the response
-            mood = self.detect_mood(text, reply)
 
             # Show mood expression while displaying the response
             if mood != "idle":
