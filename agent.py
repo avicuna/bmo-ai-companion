@@ -110,16 +110,20 @@ if TTS_ENGINE == "elevenlabs":
 
 # --- BMO VOICE POST-PROCESSING CHAIN ---
 # Makes any TTS voice sound like it's coming from a tiny game console
+# UPDATED PER AI COUNCIL RECOMMENDATIONS (2026-03-19):
+#   - Lowpass: 7kHz → 8.5kHz (preserves sibilants for intelligibility)
+#   - Bitcrush: 12-bit → 14-bit (preserves consonants for daily use)
+#   - Target: 70% clarity / 30% retro effect
 BMO_VOICE_CHAIN = Pedalboard([
     HighpassFilter(cutoff_frequency_hz=250),    # Cut muddy bass (small speaker sim)
-    LowpassFilter(cutoff_frequency_hz=7000),    # Roll off high end (toy speaker sim)
-    Bitcrush(bit_depth=12),                     # Subtle digital crunch
+    LowpassFilter(cutoff_frequency_hz=8500),    # Roll off high end (toy speaker sim) - UPDATED
+    Bitcrush(bit_depth=14),                     # Subtle digital crunch - UPDATED
     Reverb(room_size=0.05, wet_level=0.08),     # Tiny plastic box resonance
     Gain(gain_db=2),                            # Compensate volume loss
 ])
 
 BMO_PITCH_SHIFT = CURRENT_CONFIG.get("bmo_pitch_shift", 1.5)  # Semitones up
-BMO_LOFI_RATE = CURRENT_CONFIG.get("bmo_lofi_sample_rate", 11025)  # Downsample target
+BMO_LOFI_RATE = CURRENT_CONFIG.get("bmo_lofi_sample_rate", 16000)  # Downsample target - UPDATED
 BMO_POST_PROCESSING = CURRENT_CONFIG.get("bmo_post_processing", True)
 
 def apply_bmo_voice_effect(audio_array, sample_rate=22050):
